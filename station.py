@@ -66,7 +66,7 @@ class Station:
             if not ignore_error:
                 raise ConnectionError(f"Could not fetch data for {self.stationId}: {e}")
     
-    def get(self, obs_id: int = 127) -> Observation:
+    def get_observation(self, obs_id: int = 127) -> Observation:
         # Fetch if cached response is null or stale (more than 300 seconds old)
         if self._cachedResponse == None or self._cachedResponse["observations"][127]["epoch"] < time.time() - 300:
             self.fetch(ignore_error=self._cachedResponse != None)
