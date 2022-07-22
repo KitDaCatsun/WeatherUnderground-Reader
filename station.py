@@ -1,3 +1,4 @@
+from tkinter import N
 from typing import List, Tuple
 import requests
 import time
@@ -9,13 +10,14 @@ class Observation:
         self.parse(json)
     
     @property
-    def isotime(self) -> str:
-        return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(self.epoch))
+    def age(self) -> float:
+        return time.time() - self.epoch
 
     def parse(self, json: dict):
-        self.ID: str = json["stationID"]
+        self.station_name: str = json["stationID"]
         self.pos: Tuple[float, float] = (json["lat"], json["lon"])
         self.epoch: int = json["epoch"]
+        self.UTCTime: str = json["obsTimeUtc"]
         self.timezone: str = json["tz"]
 
         self.data: List[Stat] = []
@@ -23,12 +25,14 @@ class Observation:
         for name in self.STAT_NAMES:
             stat: Stat = Stat(name, None, None, None)
             for post in ["High", "Low", "Avg", "Max", "Min"]:
-                value = None
+
                 if name + post in json.keys():
                     value = json[name + post]
                 elif name + post in json["metric"].keys():
                     value = json["metric"][name + post]
-                
+                else:
+                    value = "-"
+
                 match post:
                     case "High":
                         stat.hi = value
@@ -37,9 +41,9 @@ class Observation:
                     case "Low":
                         stat.lo = value
                     case "Max":
-                        if value != None: stat.hi = value
+                        stat.hi = value if value != "-" else stat.hi
                     case "Min":
-                        if value != None: stat.lo = value 
+                        stat.lo = value if value != "-" else stat.lo 
 
             self.data.append(stat)
 
@@ -52,34 +56,54 @@ class Station:
     }
 
     def __init__(self, station_id: str, api_key: str) -> None:
-        self.stationId = station_id
+        self.name = station_id
         self.apiKey = api_key
-        self._cachedResponse: dict | None = None
 
-    def fetch(self, ignore_error = False) -> requests.Response:
+        self._observations: List[Observation] = []
+        self.fetch()
+
+    def fetch(self) -> requests.Response:
+        print(f"Fetching data for {self.name}...")
         try:
-            response = requests.get("https://api.weather.com/v2/pws/observations/all/1day", params=self.PARAMS | {"stationId": self.stationId, "apiKey": self.apiKey})
+            p = self.PARAMS | {
+                "stationId": self.name,
+                "apiKey": self.apiKey,
+            }
 
-            self._cachedResponse = response.json()
+            response = requests.get("https://api.weather.com/v2/pws/observations/all/1day", params=p)
+            print(f"GET URL: {response.request.url}")
+
+            self._observations = []
+            for observation in response.json()["observations"]:
+                self._observations.append(Observation(observation))
+
+            print(f"Fetched {self.name}.\n")
             return response
         except requests.exceptions.ConnectionError as e:
-            if not ignore_error:
-                raise ConnectionError(f"Could not fetch data for {self.stationId}: {e}")
+            raise ConnectionError(f"Could not fetch data for {self.stationId}: {e}")
     
-    def get_observation(self, obs_id: int = 127) -> Observation:
-        # Fetch if cached response is null or stale (more than 300 seconds old)
-        if self._cachedResponse == None or self._cachedResponse["observations"][127]["epoch"] < time.time() - 300:
-            self.fetch(ignore_error=self._cachedResponse != None)
+    def get_observation(self, obs_id: int = -1) -> Observation:
+        if time.time() - self._observations[-1].epoch > 300:
+            self.fetch()
         
-        return Observation(self._cachedResponse["observations"][obs_id])
+        return self._observations[obs_id]
 
 class Stat:
-    def __init__(self, name: str, hi: float | None, av: float | None, lo: float | None) -> None:
+    def __init__(self, name: str, hi: float, av: float, lo: float) -> None:
         self.name = name
         
-        self.hi = hi
-        self.av = av
-        self.lo = lo
+        self.hi: float = hi
+        self.av: float = av
+        self.lo: float = lo
+    
+    @staticmethod
+    def _form(n: float) -> str:
+        width = 7
+
+        if n == "-":
+            return "-".rjust(width) 
+
+        return f"{n:.2f}".rjust(width)
     
     def __repr__(self) -> str:
-        return f"{self.name.ljust(25)}High: {self.hi}\tAverage: {self.av}\tLow: {self.lo}"
+        return f"{self.name.ljust(13)} Max. {self._form(self.hi)}    Avg. {self._form(self.av)}    Min. {self._form(self.lo)}"
