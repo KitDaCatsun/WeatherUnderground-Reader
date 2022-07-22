@@ -1,5 +1,4 @@
-from turtle import st
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 import requests
 import time
 

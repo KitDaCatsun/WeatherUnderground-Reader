@@ -1,4 +1,3 @@
-import time
 from station import Station, Observation
 
 API_KEY = "e1f10a1e78da46f5b10a1e78da96f525"
