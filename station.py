@@ -1,13 +1,10 @@
-from tkinter import N
-from typing import List, Tuple
-from xmlrpc.client import boolean
+from typing import Any, Dict, List, Tuple
 import requests
 import time
 
 class Observation:
-    STAT_NAMES = ["winddir", "humidity", "temp", "windspeed", "windgust", "windchill", "dewpt", "heatindex", "pressure"]
-
     def __init__(self, json: str) -> None:
+        self.stats: Dict[str: float] = {}
         self.parse(json)
     
     @property
@@ -16,37 +13,20 @@ class Observation:
 
     def parse(self, json: dict):
         self.station_name: str = json["stationID"]
-        self.pos: Tuple[float, float] = (json["lat"], json["lon"])
         self.epoch: int = json["epoch"]
-        self.UTCTime: str = json["obsTimeUtc"]
-        self.timezone: str = json["tz"]
+        self.localtime: str = json["obsTimeLocal"]
 
-        self.data: List[Stat] = []
+        self.stats = json["metric"]
+        for key in ["humidity", "winddir"]:
+            self.stats[key] = json[key]
+    
+    def __repr__(self) -> str:
+        out = f"Readings from {time.strftime('%H:%M:%S', time.gmtime(self.epoch))} ({self.age:.1f}s ago)\n"
 
-        for name in self.STAT_NAMES:
-            stat: Stat = Stat(name, None, None, None)
-            for post in ["High", "Low", "Avg", "Max", "Min"]:
+        for name, value in self.stats.items():
+            out += f"{(name + ':').ljust(15)} {value:7.2f}\n"
 
-                if name + post in json.keys():
-                    value = json[name + post]
-                elif name + post in json["metric"].keys():
-                    value = json["metric"][name + post]
-                else:
-                    value = "-"
-
-                match post:
-                    case "High":
-                        stat.hi = value
-                    case "Avg":
-                        stat.av = value
-                    case "Low":
-                        stat.lo = value
-                    case "Max":
-                        stat.hi = value if value != "-" else stat.hi
-                    case "Min":
-                        stat.lo = value if value != "-" else stat.lo 
-
-            self.data.append(stat)
+        return out
 
 class Station:
 
@@ -58,67 +38,54 @@ class Station:
 
     def __init__(self, station_id: str, api_key: str) -> None:
         self.name = station_id
-        self.apiKey = api_key
 
-        self.observations: List[Observation] = []
+        self.lat: float = None
+        self.lon: float = None
+        self.elev: float = None
 
+        self.current = None
+
+        self._apiKey = api_key
         self._cache = (-time.time(), None)
 
-    def fetch(self) -> requests.Response:
-        if time.time() - self._cache[0] < 5:
+        self.update()
+
+    def fetch(self) -> Any:
+        if time.time() - self._cache[0] < 1:
             return self._cache[1]
 
         try:
             p = self.PARAMS | {
                 "stationId": self.name,
-                "apiKey": self.apiKey,
+                "apiKey": self._apiKey,
             }
 
-            response = requests.get("https://api.weather.com/v2/pws/observations/all/1day", params=p)
-            self._cache = (time.time(), response)
+            response = requests.get("https://api.weather.com/v2/pws/observations/current", params=p)
+            data = response.json()["observations"][0]
 
-            return response
+            self._cache = (time.time(), data)
+
+            return data
         except requests.exceptions.ConnectionError as e:
             raise ConnectionError(f"Could not fetch data for {self.stationId}: {e}")
     
     def update(self) -> None:
         if not self.stale: return
 
-        self.observations = []
-        for observation in reversed(self.fetch().json()["observations"]):
-            self.observations.append(Observation(observation))
+        self.current = Observation(self.fetch())
+
+        self.lat = self.fetch()["lat"]
+        self.lon = self.fetch()["lon"]
+        self.elev = self.fetch()["metric"]["elev"]
 
     @property
     def stale(self) -> bool:
-        if not self.observations: return True
+        if not self.current: return True
 
-        if time.time() - self.observations[0].epoch < 300:
+        if time.time() - self.current.epoch < 30:
             return False
         else:
-            return len(self.fetch().json()["observations"]) != len(self.observations)
+            return self.fetch()["epoch"] != self.current.epoch
 
-    def get_observation(self, obs_id: int = 0) -> Observation:
-        if self.stale:
-            self.fetch()
-        
-        return self.observations[obs_id]
-
-class Stat:
-    def __init__(self, name: str, hi: float, av: float, lo: float) -> None:
-        self.name = name
-        
-        self.hi: float = hi
-        self.av: float = av
-        self.lo: float = lo
-    
-    @staticmethod
-    def _form(n: float) -> str:
-        width = 7
-
-        if n == "-":
-            return "-".rjust(width) 
-
-        return f"{n:.2f}".rjust(width)
-    
     def __repr__(self) -> str:
-        return f"{self.name.ljust(13)} Max. {self._form(self.hi)}    Avg. {self._form(self.av)}    Min. {self._form(self.lo)}"
+        return f"{self.name}\nLatitude: {str(self.lat).ljust(4)}\nLongitude: {str(self.lon).ljust(4)}\nElevation: {str(self.elev).ljust(4)}m"
