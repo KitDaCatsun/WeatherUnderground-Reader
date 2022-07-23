@@ -1,5 +1,6 @@
 from tkinter import N
 from typing import List, Tuple
+from xmlrpc.client import boolean
 import requests
 import time
 
@@ -59,11 +60,14 @@ class Station:
         self.name = station_id
         self.apiKey = api_key
 
-        self._observations: List[Observation] = []
-        self.fetch()
+        self.observations: List[Observation] = []
+
+        self._cache = (-time.time(), None)
 
     def fetch(self) -> requests.Response:
-        print(f"Fetching data for {self.name}...")
+        if time.time() - self._cache[0] < 5:
+            return self._cache[1]
+
         try:
             p = self.PARAMS | {
                 "stationId": self.name,
@@ -71,22 +75,33 @@ class Station:
             }
 
             response = requests.get("https://api.weather.com/v2/pws/observations/all/1day", params=p)
-            print(f"GET URL: {response.request.url}")
+            self._cache = (time.time(), response)
 
-            self._observations = []
-            for observation in response.json()["observations"]:
-                self._observations.append(Observation(observation))
-
-            print(f"Fetched {self.name}.\n")
             return response
         except requests.exceptions.ConnectionError as e:
             raise ConnectionError(f"Could not fetch data for {self.stationId}: {e}")
     
-    def get_observation(self, obs_id: int = -1) -> Observation:
-        if time.time() - self._observations[-1].epoch > 300:
+    def update(self) -> None:
+        if not self.stale: return
+
+        self.observations = []
+        for observation in reversed(self.fetch().json()["observations"]):
+            self.observations.append(Observation(observation))
+
+    @property
+    def stale(self) -> bool:
+        if not self.observations: return True
+
+        if time.time() - self.observations[0].epoch < 300:
+            return False
+        else:
+            return len(self.fetch().json()["observations"]) != len(self.observations)
+
+    def get_observation(self, obs_id: int = 0) -> Observation:
+        if self.stale:
             self.fetch()
         
-        return self._observations[obs_id]
+        return self.observations[obs_id]
 
 class Stat:
     def __init__(self, name: str, hi: float, av: float, lo: float) -> None:
