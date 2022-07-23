@@ -67,7 +67,7 @@ class Station:
 
             return data
         except requests.exceptions.ConnectionError as e:
-            raise ConnectionError(f"Could not fetch data for {self.stationId}: {e}")
+            raise ConnectionError(f"Could not fetch data for {self.name}: {e}")
     
     def update(self) -> None:
         if not self.stale: return
